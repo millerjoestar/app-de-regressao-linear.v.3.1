@@ -317,16 +317,17 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
         st.write(f"- 🟢 **Variáveis Significativas:** {', '.join(significativas) if significativas else 'Nenhuma'}")
         st.write(f"- 🔴 **Variáveis Não-Significativas:** {', '.join(nao_significativas) if nao_significativas else 'Nenhuma'}")
 
-        # Sinais inesperados vs correlação original
+       # Sinais inesperados vs correlação original
         st.markdown("**Detecção de Sinais Inesperados (Supressão/Multicolinearidade):**")
         sinais_alterados = []
         for col in independent_cols:
             corr_orig = corr_with_y[col]
             coef_multi = modelo_multi.params[col]
             if (corr_orig > 0 and coef_multi < 0) or (corr_orig < 0 and coef_multi > 0):
-                sinais_alterados.append(col)
-
+                sinais_alterados.append(str(col)) # Garante que o nome vire texto puro
+                
         if sinais_alterados:
-            st.warning(f"⚠️ Atenção! As variáveis **{', '.join(sinais_alterados)}** trocaram de sinal (positivo vs negativo) da correlação simples para o coeficiente na regressão múltipla. Isso é um forte indício de multicolinearidade ou efeito de variáveis de confusão (Simpson's Paradox).")
+            texto_sinais = ", ".join(sinais_alterados)
+            st.warning(f"⚠️ Atenção! As variáveis **{texto_sinais}** trocaram de sinal (positivo vs negativo) da correlação simples para o coeficiente na regressão múltipla. Isso é um forte indício de multicolinearidade ou efeito de variáveis de confusão (Simpson's Paradox).")
         else:
             st.info("✓ Todos os sinais dos coeficientes no modelo múltiplo acompanham o sentido das suas correlações individuais.")
