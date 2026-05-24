@@ -6,6 +6,7 @@ import seaborn as sns
 import statsmodels.api as sm
 from scipy.stats import skew, gaussian_kde
 from scipy.signal import find_peaks
+import re
 
 # Configuração da Página
 st.set_page_config(page_title="Análise Estatística & Regressão", layout="wide", page_icon="📊")
@@ -66,6 +67,11 @@ def detectar_bimodalidade(s):
 def format_p_value(p):
     return "< 0.001" if p < 0.001 else f"{p:.4f}"
 
+def limpar_nome_latex(nome):
+    # Remove qualquer caractere que quebre a renderização de fórmulas matemáticas do LaTeX
+    nome_limpo = re.sub(r'[\(\)\$\/%\s\.\-\,]+', '_', str(nome))
+    return nome_limpo.strip('_')
+
 # Interface Lateral (Sidebar)
 with st.sidebar:
     st.header("⚙️ Configurações do Modelo")
@@ -80,12 +86,13 @@ with st.sidebar:
             
             # --- TRATAMENTO CORRETIVO DAS VARIÁVEIS ---
             for col in df.columns:
-                if col != 'Obs.': 
+                if str(col).lower() not in ['obs', 'obs.', 'id', 'identificação']:
                     converted = pd.to_numeric(df[col].astype(str).str.replace(',', '.').str.extract(r'([\d\.\-]+)', expand=False), errors='coerce')
                     if converted.notna().sum() > len(df) * 0.3:
                         df[col] = pd.to_numeric(df[col], errors='coerce')
 
-            numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
+            # Captura colunas numéricas, ignorando estritamente colunas de identificação como 'Obs.'
+            numeric_cols = [c for c in df.select_dtypes(include=np.number).columns.tolist() if str(c).lower() not in ['obs', 'obs.', 'id']]
             numeric_cols = [c for c in numeric_cols if df[c].nunique() > 1]
 
             if len(numeric_cols) < 2:
@@ -107,11 +114,20 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
         "📈 1. Estatística Descritiva", 
         "📊 2. Distribuições", 
         "🔗 3. Correlação & Dispersão", 
-        "📉 4. Regressão Simples", 
-        "🧮 5. Regressão Múltipla Completa"
+        "🧮 4. Equação de Regressão Múltipla", 
+        "📋 5. Diagnóstico Completo do Modelo"
     ])
 
     df_num = df[numeric_cols].dropna()
+    
+    # Processamento prévio do modelo múltiplo para usar nos módulos
+    X_multi = sm.add_constant(df_num[independent_cols])
+    Y = df_num[target_col]
+    modelo_multi = sm.OLS(Y, X_multi).fit()
+    
+    corr_matrix = df_num.corr()
+    corr_with_y = corr_matrix[target_col].drop(target_col)
+    best_x = corr_with_y.abs().idxmax()
     
     # MÓDULO 1: Estatística Descritiva
     with tab1:
@@ -124,7 +140,7 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
         max_cv_val = desc_df['CV (%)'].max()
         
         st.markdown(f"**Heterogeneidade:** A variável com maior dispersão relativa é a **{max_cv_var}**, apresentando um Coeficiente de Variação de **{max_cv_val:.2f}%**.")
-        st.info(f"**Significado Gerencial:** Uma alta variação em `{max_cv_var}` sugere baixa padronização operacional.")
+        st.info(f"**Significado Gerencial:** Uma alta variação em `{max_cv_var}` sugere menor padronização nos dados observados.")
         
         st.markdown("**Análise de Assimetria:**")
         assimetrias = {c: analisar_assimetria(df_num[c]) for c in numeric_cols}
@@ -162,7 +178,6 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
     # MÓDULO 3: Correlação e Dispersão
     with tab3:
         st.header("Módulo 3: Correlação de Pearson e Dispersão")
-        corr_matrix = df_num.corr()
         
         col1, col2 = st.columns([1.5, 1])
         with col1:
@@ -190,8 +205,6 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
         
         st.markdown("---")
         st.subheader(f"Scatterplots (Impacto sobre Y: {target_col})")
-        corr_with_y = corr_matrix[target_col].drop(target_col)
-        best_x = corr_with_y.abs().idxmax()
 
         scatter_cols = st.columns(3)
         for i, indep in enumerate(independent_cols):
@@ -202,69 +215,57 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
                 st.pyplot(fig)
                 plt.close()
 
-    # MÓDULO 4: Regressão Simples
+    # MÓDULO 4: EQUAÇÃO COMPLETA DE REGRESSÃO MÚLTIPLA
     with tab4:
-        st.header("Módulo 4: Regressão Linear Simples (Melhor Preditor)")
-        st.markdown(f"Análise focada isoladamente na variável mais forte: **{best_x}**")
+        st.header("Módulo 4: Modelo Estimado Completo (Regressão Múltipla)")
+        st.markdown("Esta é a equação matemática global que estima o comportamento de Y utilizando todas as variáveis independentes simultaneamente.")
         
-        X_simples = sm.add_constant(df_num[best_x])
-        Y = df_num[target_col]
-        modelo_simples = sm.OLS(Y, X_simples).fit()
-        
-        b0_s = modelo_simples.params['const']
-        b1_s = modelo_simples.params[best_x]
-        
-        st.markdown(f"### Equação Estimada Simples\n$$ Y = {b0_s:.4f} + ({b1_s:.4f} \cdot \\text{{{best_x}}}) $$")
-
-    # MÓDULO 5: Regressão Múltipla Completa (EQUAÇÃO COM TODAS AS VARIÁVEIS)
-    with tab5:
-        st.header("Módulo 5: Regressão Linear Múltipla Global")
-        
-        X_multi = sm.add_constant(df_num[independent_cols])
-        Y = df_num[target_col]
-        modelo_multi = sm.OLS(Y, X_multi).fit()
-        
-        # --- CONSTRUÇÃO DINÂMICA DA EQUAÇÃO COM TODAS AS VARIÁVEIS ---
+        # Criação limpa da equação em formato matemático LaTeX
         intercepto = modelo_multi.params['const']
         partes_equacao = [f"{intercepto:.4f}"]
         
-        for idx, col in enumerate(independent_cols):
+        for col in independent_cols:
             coef = modelo_multi.params[col]
             sinal = "+" if coef >= 0 else "-"
-            partes_equacao.append(f"{sinal} ({abs(coef):.4f} \cdot \\text{{{col}}})")
+            nome_seguro = limpar_nome_latex(col)
+            partes_equacao.append(f"{sinal} ({abs(coef):.4f} \cdot \\text{{{nome_seguro}}})")
             
         equacao_completa_texto = " ".join(partes_equacao)
+        target_limpo = limpar_nome_latex(target_col)
         
-        st.subheader("🧮 Equação de Regressão Linear Múltipla Completa")
-        st.markdown(f"$$ \\widehat{{{target_col}}} = {equacao_completa_texto} $$")
+        st.info("### 🧮 Equação Geral Estimada:")
+        st.markdown(f"$$ \\widehat{{\\text{{{target_limpo}}}}} = {equacao_completa_texto} $$")
         
-        # Tabela Prática de Interpretação dos Coeficientes
-        st.subheader("📋 Significado Prático de Cada Variável no Modelo")
+        st.markdown("---")
+        st.subheader("📋 Significado Prático e Gerencial de Cada Coeficiente")
         dados_interpretacao = []
         for col in independent_cols:
             coef = modelo_multi.params[col]
             p_val = modelo_multi.pvalues[col]
             sig = "Sim (Efeito Real)" if p_val < 0.05 else "Não (Ruído Estatístico)"
-            sentido = "Aumenta" if coef > 0 else "Diminui"
+            sentido = "aumenta" if coef > 0 else "diminui"
             
             dados_interpretacao.append({
                 "Variável Independente (X)": col,
                 "Coeficiente (Impacto)": f"{coef:.4f}",
                 "Significativo (Alfa 5%)": sig,
-                "Interpretação Textual": f"Mantendo o resto constante, cada +1 un. em '{col}' {sentido} {target_col} em {abs(coef):.4f} un."
+                "Interpretação Econômica/Operacional": f"Mantendo os demais fatores constantes, o incremento de 1 unidade em '{col}' causa uma variação média que {sentido} '{target_col}' em {abs(coef):.4f} unidades."
             })
             
         st.dataframe(pd.DataFrame(dados_interpretacao).set_index("Variável Independente (X)"), use_container_width=True)
+
+    # MÓDULO 5: Diagnóstico e Validação Completa
+    with tab5:
+        st.header("Módulo 5: Diagnóstico, ANOVA e Resumos de Validação")
         
-        st.markdown("---")
         st.subheader("📊 Relatórios Estatísticos de Validação (Statsmodels)")
         st.text(modelo_multi.summary().tables[0].as_text())
         st.text(modelo_multi.summary().tables[1].as_text())
         
         st.markdown("---")
-        st.subheader("🔎 Análise Avançada")
-        st.markdown(f"**Poder de Explicação Combinado (R² Múltiplo):** {modelo_multi.rsquared:.4f} *(As variáveis juntas explicam {modelo_multi.rsquared*100:.1f}% de '{target_col}')*")
-        st.markdown(f"**R² Ajustado (Penalidade por excesso de X):** {modelo_multi.rsquared_adj:.4f}")
+        st.subheader("🔎 Métricas de Ajuste Global")
+        st.markdown(f"**Poder de Explicação Combinado (R² Global):** {modelo_multi.rsquared:.4f} *(As variáveis juntas explicam {modelo_multi.rsquared*100:.1f}% da variação de '{target_col}')*")
+        st.markdown(f"**R² Ajustado:** {modelo_multi.rsquared_adj:.4f}")
         
         st.markdown("**Significância Individual (Alfa 5%):**")
         pvalues = modelo_multi.pvalues.drop('const')
