@@ -6,7 +6,6 @@ import seaborn as sns
 import statsmodels.api as sm
 from scipy.stats import skew, gaussian_kde
 from scipy.signal import find_peaks
-import re
 
 # Configuração da Página
 st.set_page_config(page_title="Análise Estatística & Regressão", layout="wide", page_icon="📊")
@@ -67,10 +66,10 @@ def detectar_bimodalidade(s):
 def format_p_value(p):
     return "< 0.001" if p < 0.001 else f"{p:.4f}"
 
-def limpar_nome_latex(nome):
-    # Remove qualquer caractere que quebre a renderização de fórmulas matemáticas do LaTeX
-    nome_limpo = re.sub(r'[\(\)\$\/%\s\.\-\,]+', '_', str(nome))
-    return nome_limpo.strip('_')
+def formatar_texto_latex(texto):
+    # Limpa caracteres especiais do LaTeX mas preserva espaços legíveis e acentos usando a tag correta
+    txt = str(texto).replace('%', '\\%').replace('$', '\\$').replace('_', '\\_')
+    return f"\\text{{{txt}}}"
 
 # Interface Lateral (Sidebar)
 with st.sidebar:
@@ -91,7 +90,7 @@ with st.sidebar:
                     if converted.notna().sum() > len(df) * 0.3:
                         df[col] = pd.to_numeric(df[col], errors='coerce')
 
-            # Captura colunas numéricas, ignorando estritamente colunas de identificação como 'Obs.'
+            # Captura colunas numéricas ignorando estritamente 'Obs.' para Y e X
             numeric_cols = [c for c in df.select_dtypes(include=np.number).columns.tolist() if str(c).lower() not in ['obs', 'obs.', 'id']]
             numeric_cols = [c for c in numeric_cols if df[c].nunique() > 1]
 
@@ -120,14 +119,13 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
 
     df_num = df[numeric_cols].dropna()
     
-    # Processamento prévio do modelo múltiplo para usar nos módulos
+    # Processamento prévio do modelo múltiplo
     X_multi = sm.add_constant(df_num[independent_cols])
     Y = df_num[target_col]
     modelo_multi = sm.OLS(Y, X_multi).fit()
     
     corr_matrix = df_num.corr()
     corr_with_y = corr_matrix[target_col].drop(target_col)
-    best_x = corr_with_y.abs().idxmax()
     
     # MÓDULO 1: Estatística Descritiva
     with tab1:
@@ -140,7 +138,6 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
         max_cv_val = desc_df['CV (%)'].max()
         
         st.markdown(f"**Heterogeneidade:** A variável com maior dispersão relativa é a **{max_cv_var}**, apresentando um Coeficiente de Variação de **{max_cv_val:.2f}%**.")
-        st.info(f"**Significado Gerencial:** Uma alta variação em `{max_cv_var}` sugere menor padronização nos dados observados.")
         
         st.markdown("**Análise de Assimetria:**")
         assimetrias = {c: analisar_assimetria(df_num[c]) for c in numeric_cols}
@@ -163,9 +160,6 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
                 plt.close()
                 
                 shape = analisar_assimetria(df_num[col])
-                bimodal = detectar_bimodalidade(df_num[col])
-                if bimodal: shape = "Bimodal (possível existência de dois grupos distintos)"
-                
                 Q1, Q3 = desc_df.loc[col, 'Q1'], desc_df.loc[col, 'Q3']
                 IQR = Q3 - Q1
                 outliers_abaixo = len(df_num[df_num[col] < (Q1 - 1.5 * IQR)])
@@ -215,26 +209,27 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
                 st.pyplot(fig)
                 plt.close()
 
-    # MÓDULO 4: EQUAÇÃO COMPLETA DE REGRESSÃO MÚLTIPLA
+    # MÓDULO 4: EQUAÇÃO COMPLETA DE REGRESSÃO MÚLTIPLA (RESTAURADA E BONITA)
     with tab4:
         st.header("Módulo 4: Modelo Estimado Completo (Regressão Múltipla)")
         st.markdown("Esta é a equação matemática global que estima o comportamento de Y utilizando todas as variáveis independentes simultaneamente.")
         
-        # Criação limpa da equação em formato matemático LaTeX
+        # Montagem correta e alinhada do LaTeX profissional
         intercepto = modelo_multi.params['const']
         partes_equacao = [f"{intercepto:.4f}"]
         
         for col in independent_cols:
             coef = modelo_multi.params[col]
             sinal = "+" if coef >= 0 else "-"
-            nome_seguro = limpar_nome_latex(col)
-            partes_equacao.append(f"{sinal} ({abs(coef):.4f} \cdot \\text{{{nome_seguro}}})")
+            nome_formatado = formatar_texto_latex(col)
+            partes_equacao.append(f"{sinal} ({abs(coef):.4f} \\cdot {nome_formatado})")
             
         equacao_completa_texto = " ".join(partes_equacao)
-        target_limpo = limpar_nome_latex(target_col)
+        target_formatado = formatar_texto_latex(target_col)
         
         st.info("### 🧮 Equação Geral Estimada:")
-        st.markdown(f"$$ \\widehat{{\\text{{{target_limpo}}}}} = {equacao_completa_texto} $$")
+        # Renderiza centralizado e formatado adequadamente como fórmula matemática real
+        st.write(f"$$ \\widehat{{{target_formatado}}} = {equacao_completa_texto} $$")
         
         st.markdown("---")
         st.subheader("📋 Significado Prático e Gerencial de Cada Coeficiente")
