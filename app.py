@@ -6,6 +6,7 @@ import seaborn as sns
 import statsmodels.api as sm
 from scipy.stats import skew, gaussian_kde
 from scipy.signal import find_peaks
+import re
 
 # Configuração da Página
 st.set_page_config(page_title="Análise Estatística & Regressão", layout="wide", page_icon="📊")
@@ -71,6 +72,36 @@ def formatar_texto_latex(texto):
     txt = str(texto).replace('%', '\\%').replace('$', '\\$').replace('_', '\\_')
     return f"\\text{{{txt}}}"
 
+def recuperar_nota_corrompida(val):
+    val_str = str(val).strip()
+    # Verifica se o Excel corrompeu a nota transformando-a em formato de data YYYY-MM-DD
+    match = re.match(r'^2026[-/](\d{2})[-/](\d{2})', val_str)
+    if match:
+        mes = int(match.group(1))
+        dia = int(match.group(2))
+        # No Excel corrompido: 4.7 vira 2026-07-04 (Mês = decimal, Dia = inteiro) ou vice-versa.
+        # Geralmente o dia é a parte inteira (4) e o mês o decimal (7), gerando 4.7
+        if dia <= 5:
+            return float(f"{dia}.{mes}")
+        else:
+            return float(f"{mes}.{dia}")
+    
+    # Se for formato DD/MM/2026 ou similar
+    match_br = re.match(r'^(\d{2})[-/](\d{2})[-/](2026|\d{2})', val_str)
+    if match_br:
+        d = int(match_br.group(1))
+        m = int(match_br.group(2))
+        if d <= 5: return float(f"{d}.{m}")
+        if m <= 5: return float(f"{m}.{d}")
+        
+    # Limpeza padrão para números normais contendo vírgulas ou símbolos
+    limpo = val_str.replace(',', '.')
+    limpo = re.sub(r'[^\d\.\-]+', '', limpo)
+    try:
+        return float(limpo) if limpo else np.nan
+    except:
+        return np.nan
+
 # Interface Lateral (Sidebar)
 with st.sidebar:
     st.header("⚙️ Configurações do Modelo")
@@ -85,23 +116,21 @@ with st.sidebar:
             
             # --- TRATAMENTO CORRETIVO DAS VARIÁVEIS ---
             for col in df.columns:
-                if str(col).lower() not in ['obs', 'obs.', 'id', 'identificação']:
-                    converted = pd.to_numeric(df[col].astype(str).str.replace(',', '.').str.extract(r'([\d\.\-]+)', expand=False), errors='coerce')
-                    if converted.notna().sum() > len(df) * 0.3:
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
+                if str(col).lower() not in ['obs', 'obs.', 'id', 'identificação', 'unidade', 'região']:
+                    # Aplica a recuperação inteligente contra erros de conversão do Excel
+                    df[col] = df[col].apply(recuperar_nota_corrompida)
 
-            # Captura TODAS as colunas numéricas (incluindo as de variação zero como Avaliação Online)
+            # Captura colunas estritamente numéricas e úteis
             all_numeric_cols = [c for c in df.select_dtypes(include=np.number).columns.tolist() if str(c).lower() not in ['obs', 'obs.', 'id']]
-            
+            all_numeric_cols = [c for c in all_numeric_cols if df[c].notna().sum() > 0]
+
             if len(all_numeric_cols) < 2:
                 st.error("A base precisa ter pelo menos 2 variáveis numéricas válidas.")
                 st.stop()
                 
-            # Na caixa do Y, só deixamos escolher variáveis que VARIEM (mudar constante em Y não faz sentido)
             valid_targets = [c for c in all_numeric_cols if df[c].nunique() > 1]
             target_col = st.selectbox("2. Selecione a Variável Y (Dependente)", valid_targets)
             
-            # As variáveis independentes incluem tudo
             independent_cols = [c for c in all_numeric_cols if c != target_col]
             run_btn = st.button("🚀 Rodar Análise", use_container_width=True)
             
@@ -122,18 +151,16 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
 
     df_num = df[all_numeric_cols].dropna()
     
-    # Separando quem é constante de quem é variável para a regressão não quebrar
     reg_independent_cols = [c for c in independent_cols if df_num[c].nunique() > 1]
     const_independent_cols = [c for c in independent_cols if df_num[c].nunique() <= 1]
     
-    # Processamento prévio do modelo múltiplo seguro (apenas com quem varia de verdade)
     X_multi = sm.add_constant(df_num[reg_independent_cols])
     Y = df_num[target_col]
     modelo_multi = sm.OLS(Y, X_multi).fit()
     
     corr_matrix = df_num.corr()
     
-    # MÓDULO 1: Estatística Descritiva (MOSTRA TODAS!)
+    # MÓDULO 1: Estatística Descritiva
     with tab1:
         st.header("Módulo 1: Estatística Descritiva Completa")
         desc_df = calcular_descritiva(df_num, all_numeric_cols)
@@ -151,7 +178,7 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
         for var, estado in assimetrias.items():
             st.markdown(f"- **{var}:** {estado}.")
 
-    # MÓDULO 2: Frequência e Distribuição (MOSTRA TODAS!)
+    # MÓDULO 2: Frequência e Distribuição
     with tab2:
         st.header("Módulo 2: Distribuição de Frequências e Outliers")
         cols_ui = st.columns(2)
@@ -180,13 +207,13 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
         col1, col2 = st.columns([1.5, 1])
         with col1:
             fig, ax = plt.subplots(figsize=(8, 6))
-            # Heatmap apenas das que têm correlação calculável (variação > 0)
-            sns.heatmap(df_num[valid_targets].corr(), annot=True, cmap="coolwarm", center=0, fmt=".2f", vmin=-1, vmax=1)
+            targets_calculaveis = [c for c in all_numeric_cols if df_num[c].nunique() > 1]
+            sns.heatmap(df_num[targets_calculaveis].corr(), annot=True, cmap="coolwarm", center=0, fmt=".2f", vmin=-1, vmax=1)
             st.pyplot(fig)
             plt.close()
             
         with col2:
-            corr_pairs = df_num[valid_targets].corr().unstack().reset_index()
+            corr_pairs = df_num[targets_calculaveis].corr().unstack().reset_index()
             corr_pairs.columns = ['Var1', 'Var2', 'Corr']
             corr_pairs = corr_pairs[corr_pairs['Var1'] != corr_pairs['Var2']]
             corr_pairs['Abs_Corr'] = corr_pairs['Corr'].abs()
@@ -217,7 +244,7 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
         st.header("Módulo 4: Modelo Estimado Completo (Regressão Múltipla)")
         
         if const_independent_cols:
-            st.warning(f"💡 **Nota sobre as Variáveis:** A variável **{', '.join(const_independent_cols)}** possui valor idêntico/constante em todas as linhas da tabela. Por restrição matemática, constantes são absorvidas pelo Intercepto ($b_0$) e não ganham um coeficiente solo.")
+            st.warning(f"💡 **Nota sobre as Variáveis:** A variável **{', '.join(const_independent_cols)}** possui valor constante e foi absorvida.")
 
         intercepto = modelo_multi.params['const']
         partes_equacao = [f"{intercepto:.4f}"]
@@ -249,13 +276,6 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
                 "Significativo (Alfa 5%)": sig,
                 "Interpretação Econômica/Operacional": f"Mantendo os demais fatores constantes, o incremento de 1 unidade em '{col}' causa uma variação média que {sentido} '{target_col}' em {abs(coef):.4f} unidades."
             })
-        for col in const_independent_cols:
-            dados_interpretacao.append({
-                "Variável Independente (X)": col,
-                "Coeficiente (Impacto)": "0.0000 (Constante)",
-                "Significativo (Alfa 5%)": "Não aplicável",
-                "Interpretação Econômica/Operacional": f"Esta variável não muda de valor na base de dados. Seu efeito fixo já está embutido na base da equação (59.0040)."
-            })
             
         st.dataframe(pd.DataFrame(dados_interpretacao).set_index("Variável Independente (X)"), use_container_width=True)
 
@@ -272,10 +292,8 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
         
         pvalues = modelo_multi.pvalues.drop('const')
         significativas = pvalues[pvalues < 0.05].index.tolist()
-        nao_significativas = pvalues[pvalues >= 0.05].index.tolist()
         
         st.write(f"- 🟢 **Variáveis com impacto real comprovado:** {', '.join(significativas) if significativas else 'Nenhuma'}")
-        st.write(f"- 🔴 **Variáveis que podem ser descartadas (ruído):** {', '.join(nao_significativas) if nao_significativas else 'Nenhuma'}")
         
         corr_with_y = corr_matrix[target_col].drop(target_col)
         sinais_alterados = []
