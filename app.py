@@ -79,17 +79,13 @@ with st.sidebar:
                 df = pd.read_excel(uploaded_file)
             
             # --- TRATAMENTO CORRETIVO DAS VARIÁVEIS ---
-            # Tenta converter todas as colunas possíveis para numérico, forçando 'errors=coerce'
-            # Isso transforma textos perdidos em NaN para não quebrar o modelo e resgatar a coluna
             for col in df.columns:
-                if col != 'Obs.': # Ignora a coluna de identificação/observação
+                if col != 'Obs.': 
                     converted = pd.to_numeric(df[col].astype(str).str.replace(',', '.').str.extract(r'([\d\.\-]+)', expand=False), errors='coerce')
-                    if converted.notna().sum() > len(df) * 0.3: # Se pelo menos 30% da coluna for número, aceita
+                    if converted.notna().sum() > len(df) * 0.3:
                         df[col] = pd.to_numeric(df[col], errors='coerce')
 
             numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
-            
-            # Remove colunas com variação zero ou totalmente vazias
             numeric_cols = [c for c in numeric_cols if df[c].nunique() > 1]
 
             if len(numeric_cols) < 2:
@@ -112,7 +108,7 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
         "📊 2. Distribuições", 
         "🔗 3. Correlação & Dispersão", 
         "📉 4. Regressão Simples", 
-        "📉 5. Regressão Múltipla"
+        "🧮 5. Regressão Múltipla Completa"
     ])
 
     df_num = df[numeric_cols].dropna()
@@ -123,26 +119,22 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
         desc_df = calcular_descritiva(df_num, numeric_cols)
         st.dataframe(desc_df.style.format("{:.2f}"), use_container_width=True)
         
-        st.subheader("🔎amp; Interpretação Automática")
+        st.subheader("🔎 Interpretação Automática")
         max_cv_var = desc_df['CV (%)'].idxmax()
         max_cv_val = desc_df['CV (%)'].max()
         
         st.markdown(f"**Heterogeneidade:** A variável com maior dispersão relativa é a **{max_cv_var}**, apresentando um Coeficiente de Variação de **{max_cv_val:.2f}%**.")
-        st.info(f"**Significado Gerencial:** Uma alta variação em `{max_cv_var}` sugere baixa padronização operacional (ex: na gestão de uma rede como a *Atlas Hotéis*, isso pode indicar inconsistência entre unidades, dependência excessiva de sazonalidade ou flutuações de mercado não controladas).")
+        st.info(f"**Significado Gerencial:** Uma alta variação em `{max_cv_var}` sugere baixa padronização operacional.")
         
         st.markdown("**Análise de Assimetria:**")
         assimetrias = {c: analisar_assimetria(df_num[c]) for c in numeric_cols}
         for var, estado in assimetrias.items():
             if "Assimétrica" in estado:
                 st.markdown(f"- **{var}:** {estado}.")
-        
-        st.info("**Significado Gerencial da Assimetria:** Assimetria positiva indica uma concentração de valores baixos com raros picos muito altos. Assimetria negativa aponta uma concentração em valores altos, com raras quedas bruscas.")
 
-    # MÓDULO 2: Frequência e Distribuição (DINÂMICO PARA TODAS AS VARIÁVEIS)
+    # MÓDULO 2: Frequência e Distribuição
     with tab2:
         st.header("Módulo 2: Distribuição de Frequências e Outliers")
-        
-        # Agora ele pega dinamicamente TODAS as variáveis numéricas disponíveis no arquivo
         plot_cols = numeric_cols
             
         cols_ui = st.columns(2)
@@ -165,9 +157,7 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
                 
                 with st.expander(f"Interpretação: {col}", expanded=True):
                     st.write(f"- **Forma:** {shape.lower()}.")
-                    st.write(f"- **Outliers:** {outliers_abaixo} abaixo do limite inferior, {outliers_acima} acima do limite superior.")
-                    if outliers_acima > 0 or outliers_abaixo > 0:
-                        st.write("💡 *Visão Gerencial:* Outliers representam oportunidades de aprendizado (casos de extremo sucesso) ou problemas operacionais críticos que demandam correção imediata.")
+                    st.write(f"- **Outliers:** {outliers_abaixo} abaixo, {outliers_acima} acima.")
 
     # MÓDULO 3: Correlação e Dispersão
     with tab3:
@@ -197,19 +187,11 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
             
             st.write("**Top 3 Negativas:**")
             for _, r in top_neg.iterrows(): st.write(f"- {r['Var1']} & {r['Var2']}: **{r['Corr']:.3f}**")
-            
-            multicolinearidade = corr_pairs[corr_pairs['Abs_Corr'] > 0.85]
-            if not multicolinearidade.empty:
-                st.warning(f"⚠️ **Multicolinearidade detectada (|r| > 0.85):**")
-                for _, r in multicolinearidade.iterrows(): st.write(f"- {r['Var1']} e {r['Var2']} ({r['Corr']:.2f})")
         
         st.markdown("---")
         st.subheader(f"Scatterplots (Impacto sobre Y: {target_col})")
-        
         corr_with_y = corr_matrix[target_col].drop(target_col)
         best_x = corr_with_y.abs().idxmax()
-        
-        st.info(f"**Atenção:** A variável independente com maior correlação com '{target_col}' é **'{best_x}'** (r = {corr_with_y[best_x]:.3f}).")
 
         scatter_cols = st.columns(3)
         for i, indep in enumerate(independent_cols):
@@ -219,72 +201,80 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
                 ax.set_title(f"Y vs {indep}")
                 st.pyplot(fig)
                 plt.close()
-                st.caption(f"**Relação Linear (r):** {corr_with_y[indep]:.2f}")
 
     # MÓDULO 4: Regressão Simples
     with tab4:
-        st.header("PARTE IV: 4.1 Regressão Linear Simples")
-        st.markdown(f"Modelo selecionado automaticamente usando o melhor preditor linear: **{best_x}**")
+        st.header("Módulo 4: Regressão Linear Simples (Melhor Preditor)")
+        st.markdown(f"Análise focada isoladamente na variável mais forte: **{best_x}**")
         
         X_simples = sm.add_constant(df_num[best_x])
         Y = df_num[target_col]
         modelo_simples = sm.OLS(Y, X_simples).fit()
         
-        b0 = modelo_simples.params['const']
-        b1 = modelo_simples.params[best_x]
+        b0_s = modelo_simples.params['const']
+        b1_s = modelo_simples.params[best_x]
         
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown(f"### Equação Estimada\n$$ Y = {b0:.4f} + ({b1:.4f} \cdot X) $$")
-            st.markdown(f"**Onde:** Y = {target_col}, X = {best_x}")
-            st.markdown(f"""
-            **Interpretação Gerencial:**
-            * **Intercepto ($b_0 = {b0:.2f}$):** Valor de {target_col} se {best_x} for zero.
-            * **Coeficiente ($b_1 = {b1:.2f}$):** Para cada unidade adicional de {best_x}, espera-se uma variação média de {b1:.2f} em {target_col}.
-            """)
-            
-        with col2:
-            st.markdown("### Qualidade e Testes de Hipótese")
-            r2_simples = modelo_simples.rsquared
-            st.write(f"- **R²:** {r2_simples:.4f} *(Explica {r2_simples*100:.1f}% da variação)*")
-            st.write(f"- **Teste F (Global):** F = {modelo_simples.fvalue:.2f} | p-valor = {format_p_value(modelo_simples.f_pvalue)}")
-            st.write(f"- **Teste t ({best_x}):** t = {modelo_simples.tvalues[best_x]:.2f} | p-valor = {format_p_value(modelo_simples.pvalues[best_x])}")
-            
-            if modelo_simples.pvalues[best_x] < 0.05:
-                st.success("✅ Significativo a 5%. O impacto é estatisticamente real.")
-            else:
-                st.error("❌ Não significativo a 5%.")
+        st.markdown(f"### Equação Estimada Simples\n$$ Y = {b0_s:.4f} + ({b1_s:.4f} \cdot \\text{{{best_x}}}) $$")
 
-    # MÓDULO 5: Regressão Múltipla
+    # MÓDULO 5: Regressão Múltipla Completa (EQUAÇÃO COM TODAS AS VARIÁVEIS)
     with tab5:
-        st.header("PARTE IV: 4.2 Regressão Linear Múltipla")
+        st.header("Módulo 5: Regressão Linear Múltipla Global")
         
         X_multi = sm.add_constant(df_num[independent_cols])
+        Y = df_num[target_col]
         modelo_multi = sm.OLS(Y, X_multi).fit()
         
-        st.markdown("### Resumo Estatístico do Modelo (Statsmodels)")
+        # --- CONSTRUÇÃO DINÂMICA DA EQUAÇÃO COM TODAS AS VARIÁVEIS ---
+        intercepto = modelo_multi.params['const']
+        partes_equacao = [f"{intercepto:.4f}"]
+        
+        for idx, col in enumerate(independent_cols):
+            coef = modelo_multi.params[col]
+            sinal = "+" if coef >= 0 else "-"
+            partes_equacao.append(f"{sinal} ({abs(coef):.4f} \cdot \\text{{{col}}})")
+            
+        equacao_completa_texto = " ".join(partes_equacao)
+        
+        st.subheader("🧮 Equação de Regressão Linear Múltipla Completa")
+        st.markdown(f"$$ \\widehat{{{target_col}}} = {equacao_completa_texto} $$")
+        
+        # Tabela Prática de Interpretação dos Coeficientes
+        st.subheader("📋 Significado Prático de Cada Variável no Modelo")
+        dados_interpretacao = []
+        for col in independent_cols:
+            coef = modelo_multi.params[col]
+            p_val = modelo_multi.pvalues[col]
+            sig = "Sim (Efeito Real)" if p_val < 0.05 else "Não (Ruído Estatístico)"
+            sentido = "Aumenta" if coef > 0 else "Diminui"
+            
+            dados_interpretacao.append({
+                "Variável Independente (X)": col,
+                "Coeficiente (Impacto)": f"{coef:.4f}",
+                "Significativo (Alfa 5%)": sig,
+                "Interpretação Textual": f"Mantendo o resto constante, cada +1 un. em '{col}' {sentido} {target_col} em {abs(coef):.4f} un."
+            })
+            
+        st.dataframe(pd.DataFrame(dados_interpretacao).set_index("Variável Independente (X)"), use_container_width=True)
+        
+        st.markdown("---")
+        st.subheader("📊 Relatórios Estatísticos de Validação (Statsmodels)")
         st.text(modelo_multi.summary().tables[0].as_text())
         st.text(modelo_multi.summary().tables[1].as_text())
         
         st.markdown("---")
-        st.subheader("Análise Avançada e Interpretação")
-        st.markdown(f"**Comparação R²:** R² Simples = **{r2_simples:.4f}** | R² Múltiplo = **{modelo_multi.rsquared:.4f}** | R² Ajustado = **{modelo_multi.rsquared_adj:.4f}**.")
+        st.subheader("🔎 Análise Avançada")
+        st.markdown(f"**Poder de Explicação Combinado (R² Múltiplo):** {modelo_multi.rsquared:.4f} *(As variáveis juntas explicam {modelo_multi.rsquared*100:.1f}% de '{target_col}')*")
+        st.markdown(f"**R² Ajustado (Penalidade por excesso de X):** {modelo_multi.rsquared_adj:.4f}")
         
-        st.markdown(f"**Teste F (ANOVA):** F = {modelo_multi.fvalue:.2f} | p-valor: {format_p_value(modelo_multi.f_pvalue)}.")
-        if modelo_multi.f_pvalue < 0.05:
-            st.success("✅ Teste F Global: Modelo válido a 5%.")
-        else:
-            st.error("❌ Teste F Global: Modelo não significativo.")
-
         st.markdown("**Significância Individual (Alfa 5%):**")
         pvalues = modelo_multi.pvalues.drop('const')
         significativas = pvalues[pvalues < 0.05].index.tolist()
         nao_significativas = pvalues[pvalues >= 0.05].index.tolist()
         
-        st.write(f"- 🟢 **Significativas:** {', '.join(significativas) if significativas else 'Nenhuma'}")
-        st.write(f"- 🔴 **Não-Significativas:** {', '.join(nao_significativas) if nao_significativas else 'Nenhuma'}")
+        st.write(f"- 🟢 **Variáveis com impacto real comprovado:** {', '.join(significativas) if significativas else 'Nenhuma'}")
+        st.write(f"- 🔴 **Variáveis que podem ser descartadas (ruído):** {', '.join(nao_significativas) if nao_significativas else 'Nenhuma'}")
         
-        st.markdown("**Detecção de Sinais Inesperados:**")
+        # Detecção de sinais invertidos
         sinais_alterados = []
         for col in independent_cols:
             if (corr_with_y[col] > 0 and modelo_multi.params[col] < 0) or (corr_with_y[col] < 0 and modelo_multi.params[col] > 0):
