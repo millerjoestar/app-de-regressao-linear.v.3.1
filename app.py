@@ -4,9 +4,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import statsmodels.api as sm
-from scipy.stats import skew, gaussian_kde
+from scipy.stats import skew, gaussian_kde, bartlett
 from scipy.signal import find_peaks
 import re
+
+# Importação para Análise Fatorial
+try:
+    from factor_analyzer import FactorAnalyzer
+    from factor_analyzer.factor_analyzer import calculate_kmo, calculate_bartlett_sphericity
+    FA_AVAILABLE = True
+except ImportError:
+    FA_AVAILABLE = False
 
 # Configuração da Página
 st.set_page_config(page_title="Análise Estatística & Regressão", layout="wide", page_icon="📊")
@@ -74,19 +82,13 @@ def formatar_texto_latex(texto):
 
 def recuperar_nota_corrompida(val):
     val_str = str(val).strip()
-    # Verifica se o Excel corrompeu a nota transformando-a em formato de data YYYY-MM-DD
     match = re.match(r'^2026[-/](\d{2})[-/](\d{2})', val_str)
     if match:
         mes = int(match.group(1))
         dia = int(match.group(2))
-        # No Excel corrompido: 4.7 vira 2026-07-04 (Mês = decimal, Dia = inteiro) ou vice-versa.
-        # Geralmente o dia é a parte inteira (4) e o mês o decimal (7), gerando 4.7
-        if dia <= 5:
-            return float(f"{dia}.{mes}")
-        else:
-            return float(f"{mes}.{dia}")
+        if dia <= 5: return float(f"{dia}.{mes}")
+        else: return float(f"{mes}.{dia}")
     
-    # Se for formato DD/MM/2026 ou similar
     match_br = re.match(r'^(\d{2})[-/](\d{2})[-/](2026|\d{2})', val_str)
     if match_br:
         d = int(match_br.group(1))
@@ -94,7 +96,6 @@ def recuperar_nota_corrompida(val):
         if d <= 5: return float(f"{d}.{m}")
         if m <= 5: return float(f"{m}.{d}")
         
-    # Limpeza padrão para números normais contendo vírgulas ou símbolos
     limpo = val_str.replace(',', '.')
     limpo = re.sub(r'[^\d\.\-]+', '', limpo)
     try:
@@ -117,10 +118,8 @@ with st.sidebar:
             # --- TRATAMENTO CORRETIVO DAS VARIÁVEIS ---
             for col in df.columns:
                 if str(col).lower() not in ['obs', 'obs.', 'id', 'identificação', 'unidade', 'região']:
-                    # Aplica a recuperação inteligente contra erros de conversão do Excel
                     df[col] = df[col].apply(recuperar_nota_corrompida)
 
-            # Captura colunas estritamente numéricas e úteis
             all_numeric_cols = [c for c in df.select_dtypes(include=np.number).columns.tolist() if str(c).lower() not in ['obs', 'obs.', 'id']]
             all_numeric_cols = [c for c in all_numeric_cols if df[c].notna().sum() > 0]
 
@@ -141,23 +140,22 @@ with st.sidebar:
 # Execução do Pipeline Analítico
 if uploaded_file and 'run_btn' in locals() and run_btn:
     
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📈 1. Estatística Descritiva", 
         "📊 2. Distribuições", 
         "🔗 3. Correlação & Dispersão", 
         "🧮 4. Equação de Regressão Múltipla", 
-        "📋 5. Diagnóstico Completo do Modelo"
+        "📋 5. Diagnóstico do Modelo",
+        "🧬 6. Análise Fatorial"
     ])
 
     df_num = df[all_numeric_cols].dropna()
-    
     reg_independent_cols = [c for c in independent_cols if df_num[c].nunique() > 1]
     const_independent_cols = [c for c in independent_cols if df_num[c].nunique() <= 1]
     
     X_multi = sm.add_constant(df_num[reg_independent_cols])
     Y = df_num[target_col]
     modelo_multi = sm.OLS(Y, X_multi).fit()
-    
     corr_matrix = df_num.corr()
     
     # MÓDULO 1: Estatística Descritiva
@@ -203,7 +201,6 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
     # MÓDULO 3: Correlação e Dispersão
     with tab3:
         st.header("Módulo 3: Correlação de Pearson e Dispersão")
-        
         col1, col2 = st.columns([1.5, 1])
         with col1:
             fig, ax = plt.subplots(figsize=(8, 6))
@@ -242,13 +239,11 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
     # MÓDULO 4: EQUAÇÃO DE REGRESSÃO MÚLTIPLA
     with tab4:
         st.header("Módulo 4: Modelo Estimado Completo (Regressão Múltipla)")
-        
         if const_independent_cols:
             st.warning(f"💡 **Nota sobre as Variáveis:** A variável **{', '.join(const_independent_cols)}** possui valor constante e foi absorvida.")
 
         intercepto = modelo_multi.params['const']
         partes_equacao = [f"{intercepto:.4f}"]
-        
         for col in reg_independent_cols:
             coef = modelo_multi.params[col]
             sinal = "+" if coef >= 0 else "-"
@@ -276,7 +271,6 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
                 "Significativo (Alfa 5%)": sig,
                 "Interpretação Econômica/Operacional": f"Mantendo os demais fatores constantes, o incremento de 1 unidade em '{col}' causa uma variação média que {sentido} '{target_col}' em {abs(coef):.4f} unidades."
             })
-            
         st.dataframe(pd.DataFrame(dados_interpretacao).set_index("Variável Independente (X)"), use_container_width=True)
 
     # MÓDULO 5: Diagnóstico e Validação Completa
@@ -292,7 +286,6 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
         
         pvalues = modelo_multi.pvalues.drop('const')
         significativas = pvalues[pvalues < 0.05].index.tolist()
-        
         st.write(f"- 🟢 **Variáveis com impacto real comprovado:** {', '.join(significativas) if significativas else 'Nenhuma'}")
         
         corr_with_y = corr_matrix[target_col].drop(target_col)
@@ -300,6 +293,80 @@ if uploaded_file and 'run_btn' in locals() and run_btn:
         for col in reg_independent_cols:
             if (corr_with_y[col] > 0 and modelo_multi.params[col] < 0) or (corr_with_y[col] < 0 and modelo_multi.params[col] > 0):
                 sinais_alterados.append(str(col))
-                
         if sinais_alterados:
             st.warning(f"⚠️ As variáveis **{', '.join(sinais_alterados)}** inverteram de sinal no modelo. Indício de multicolinearidade.")
+
+    # MÓDULO 6: ANÁLISE FATORIAL EXPLORATÓRIA (SPSS STYLE)
+    with tab6:
+        st.header("Módulo 6: Análise Fatorial Exploratória (AFE)")
+        st.markdown("A Análise Fatorial agrupa variáveis independentes altamente correlacionadas em fatores latentes subjacentes.")
+        
+        if not FA_AVAILABLE:
+            st.error("A biblioteca `factor_analyzer` não está instalada. Adicione `factor_analyzer` no seu arquivo requirements.txt.")
+        else:
+            df_fa = df_num[reg_independent_cols]
+            
+            if len(reg_independent_cols) < 3:
+                st.warning("É necessário ter pelo menos 3 variáveis válidas e variantes para rodar a Análise Fatorial.")
+            else:
+                st.subheader("📋 1. Testes de Adequabilidade da Amostra")
+                
+                # Teste de Bartlett
+                chi_square, p_value_bartlett = calculate_bartlett_sphericity(df_fa)
+                # Teste KMO
+                kmo_all, kmo_model = calculate_kmo(df_fa)
+                
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.metric(label="Coeficiente KMO Geral (Kaiser-Meyer-Olkin)", value=f"{kmo_model:.3f}")
+                    if kmo_model >= 0.6:
+                        st.success("✓ KMO adequado (acima de 0.60). Os dados são elegíveis para fatoração.")
+                    else:
+                        st.warning("⚠️ KMO baixo (abaixo de 0.60). O agrupamento em fatores pode não ser robusto.")
+                        
+                with c2:
+                    st.metric(label="Teste de Esfericidade de Bartlett (p-valor)", value=format_p_value(p_value_bartlett))
+                    if p_value_bartlett < 0.05:
+                        st.success("✓ Teste Significativo (p < 0.05). A matriz de correlação não é uma matriz identidade.")
+                    else:
+                        st.error("❌ Teste Não Significativo. As variáveis não possuem correlação suficiente entre si.")
+
+                st.markdown("---")
+                st.subheader("📐 2. Variância Explicada e Escolha de Fatores (Critério de Kaiser)")
+                
+                # Ajusta o FA inicial para extrair os Autovalores (Eigenvalues)
+                fa_inicial = FactorAnalyzer(rotation=None)
+                fa_inicial.fit(df_fa)
+                ev, v = fa_inicial.get_eigenvalues()
+                
+                # Filtra quantos fatores possuem Autovalor > 1 (Critério de Kaiser)
+                n_fatores_sugeridos = max(1, sum(1 for x in ev if x >= 1.0))
+                
+                fig, ax = plt.subplots(figsize=(6, 3))
+                ax.scatter(range(1, len(ev) + 1), ev, color='#E74C3C', zorder=3)
+                ax.plot(range(1, len(ev) + 1), ev, color='#34495E', linestyle='--')
+                ax.axhline(y=1, color='gray', linestyle=':')
+                ax.set_title("Gráfico de Sedimentação (Scree Plot)")
+                ax.set_xlabel("Número do Fator")
+                ax.set_ylabel("Autovalor (Eigenvalue)")
+                st.pyplot(fig)
+                plt.close()
+                
+                st.info(f"💡 **Critério de Kaiser:** O modelo identificou **{n_fatores_sugeridos} fator(es)** com Autovalor maior ou igual a 1.0.")
+                
+                # Executa a Análise Fatorial Definitiva com rotação Varimax
+                st.markdown("---")
+                st.subheader(f"📊 3. Matriz de Cargas Fatoriais Rotacionada (Varimax)")
+                
+                fa_final = FactorAnalyzer(n_factors=n_fatores_sugeridos, rotation="varimax")
+                fa_final.fit(df_fa)
+                
+                colunas_fatores = [f"Fator {i+1}" for i in range(n_fatores_sugeridos)]
+                df_cargas = pd.DataFrame(fa_final.loadings_, columns=colunas_fatores, index=reg_independent_cols)
+                
+                # Destaca cargas fortes em negrito simulado no dataframe do streamlit
+                st.dataframe(df_cargas.style.format("{:.3f}").background_gradient(cmap="bwr", vmin=-1, vmax=1), use_container_width=True)
+                
+                st.markdown("**💡 Como ler a matriz de cargas:**")
+                st.markdown("- Valores mais distantes de zero (próximos a **+1.00** ou **-1.00**) indicam que a variável pertence àquele fator.")
+                st.markdown("- Variáveis que possuem alta carga no mesmo fator compartilham do mesmo comportamento latente na sua operação.")
