@@ -6,3 +6,4 @@ statsmodels
 matplotlib
 seaborn
 openpyxl
+factor_analyzer
